@@ -229,6 +229,13 @@ export class CheatingDaddyApp extends LitElement {
             ipcRenderer.on('update-response', (_, response) => {
                 this.updateCurrentResponse(response);
             });
+            // Claude backend responses (parallel)
+            ipcRenderer.on('new-claude-response', (_, response) => {
+                this.addNewResponse(response);
+            });
+            ipcRenderer.on('update-claude-response', (_, response) => {
+                this.updateCurrentResponse(response);
+            });
             ipcRenderer.on('update-status', (_, status) => {
                 this.setStatus(status);
             });
@@ -247,6 +254,8 @@ export class CheatingDaddyApp extends LitElement {
             const { ipcRenderer } = window.require('electron');
             ipcRenderer.removeAllListeners('new-response');
             ipcRenderer.removeAllListeners('update-response');
+            ipcRenderer.removeAllListeners('new-claude-response');
+            ipcRenderer.removeAllListeners('update-claude-response');
             ipcRenderer.removeAllListeners('update-status');
             ipcRenderer.removeAllListeners('click-through-toggled');
             ipcRenderer.removeAllListeners('reconnect-failed');
@@ -300,7 +309,7 @@ export class CheatingDaddyApp extends LitElement {
         this.requestUpdate();
     }
 
-        async handleClose() {
+    async handleClose() {
         if (this.currentView === 'customize' || this.currentView === 'help' || this.currentView === 'history') {
             this.currentView = 'main';
         } else if (this.currentView === 'assistant') {

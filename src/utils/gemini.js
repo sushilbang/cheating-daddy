@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
 const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, incrementCharUsage, getModelForToday } = require('../storage');
+const { connectToBackend, sendAudioToBackend, requestTranscription, disconnectBackend, isBackendConnected, setSystemPrompt } = require('./backend');
 
 // Groq conversation history for context
 let groqConversationHistory = [];
@@ -459,9 +460,7 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                     sendToRenderer('update-status', 'Live session connected');
                 },
                 onmessage: function (message) {
-                    console.log('----------------', message);
-
-                    // Handle input transcription (what was spoken)
+                    // Handle Gemini transcription
                     if (message.serverContent?.inputTranscription?.results) {
                         currentTranscription += formatSpeakerResults(message.serverContent.inputTranscription.results);
                     } else if (message.serverContent?.inputTranscription?.text) {
@@ -471,10 +470,8 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                         }
                     }
 
-                    // DISABLED: Gemini's outputTranscription - using Groq for faster responses instead
-                    // if (message.serverContent?.outputTranscription?.text) { ... }
-
                     if (message.serverContent?.generationComplete) {
+                        // Send to Groq/Gemma
                         if (currentTranscription.trim() !== '') {
                             if (hasGroqKey()) {
                                 sendToGroq(currentTranscription);
@@ -484,6 +481,11 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
                             currentTranscription = '';
                         }
                         messageBuffer = '';
+
+                        // Also trigger backend transcription (Whisper + Claude)
+                        if (isBackendConnected()) {
+                            requestTranscription();
+                        }
                     }
 
                     if (message.serverContent?.turnComplete) {
@@ -534,6 +536,14 @@ async function initializeGeminiSession(apiKey, customPrompt = '', profile = 'int
         isInitializingSession = false;
         if (!isReconnect) {
             sendToRenderer('session-initializing', false);
+        }
+        // -- connect to local backend --
+        try{
+            await connectToBackend('ws://localhost:3000/ws');
+            setSystemPrompt(systemPrompt);
+            console.log("[Backend] Connection established");
+        } catch (err) {
+            console.log('[Backend] Not available:', err.message);
         }
         return session;
     } catch (error) {
@@ -744,7 +754,8 @@ function stopMacOSAudioCapture() {
 
 async function sendAudioToGemini(base64Data, geminiSessionRef) {
     if (!geminiSessionRef.current) return;
-
+    // -- send to local backend --
+    sendAudioToBackend(base64Data);
     try {
         process.stdout.write('.');
         await geminiSessionRef.current.sendRealtimeInput({
@@ -828,6 +839,8 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     });
 
     ipcMain.handle('send-audio-content', async (event, { data, mimeType }) => {
+        // -- send to local backend also --
+        sendAudioToBackend(data);
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
         try {
             process.stdout.write('.');
@@ -844,6 +857,9 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
     // Handle microphone audio on a separate channel
     ipcMain.handle('send-mic-audio-content', async (event, { data, mimeType }) => {
         if (!geminiSessionRef.current) return { success: false, error: 'No active Gemini session' };
+
+        // -- send to local backend also --
+        sendAudioToBackend(data);
         try {
             process.stdout.write(',');
             await geminiSessionRef.current.sendRealtimeInput({
